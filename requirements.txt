@@ -1,0 +1,4 @@
+PyMuPDF>=1.23.0
+opencv-python>=4.8.0
+ollama>=0.1.7
+pandas>=2.0.0
