@@ -117,7 +117,9 @@ def main():
         # Open PDF
         doc = fitz.open(pdf_file)
         
-        for page_num in range(len(doc)):
+        # Start at index 2 (Page 3) to skip the Cover and Summary map pages, 
+        # and end before the last page to skip the Deletions/Modifications summary.
+        for page_num in range(2, len(doc) - 1):
             print(f"  -> Page {page_num+1}/{len(doc)}")
             page = doc.load_page(page_num)
             

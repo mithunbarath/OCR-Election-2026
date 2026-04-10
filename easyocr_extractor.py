@@ -1,31 +1,24 @@
-import fitz  # We use PyMuPDF because it avoids installing Poppler on Windows!
+import fitz  # PyMuPDF
 import cv2
 import numpy as np
 import pandas as pd
 import re
 import os
 import glob
-import pytesseract
+import easyocr
 import time
 
 # ================= Configuration =================
-# VERY IMPORTANT: You MUST install Tesseract-OCR on Windows.
-# Download it from: https://github.com/UB-Mannheim/tesseract/wiki
-# And ensure you install the standard English pack (default).
-# If you install it in the standard location, the path below will work.
-pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+OUTPUT_ALL_CSV = "voters_extracted_easyocr.csv"
+OUTPUT_REVIEW_CSV = "voters_review_easyocr.csv"
 
-OUTPUT_ALL_CSV = "voters_extracted_tess.csv"
-OUTPUT_REVIEW_CSV = "voters_review_tess.csv"
-
-# Regex Parsing Patterns (Tesseract output can be messy so we make them flexible)
-# We will use inline regexes inside the function for more robust filtering.
-
-def parse_tesseract_text(text):
+def parse_easyocr_text(lines):
     """
-    Takes the raw string from Tesseract and uses robust Regex heuristics to pull out fields.
+    Takes the raw list of strings from EasyOCR and uses robust Regex heuristics to pull out fields.
+    EasyOCR usually reads top-to-bottom, left-to-right.
     """
     record = {
+        "serial_number": None,
         "epic_id": None,
         "name": None,
         "relation_type": None,
@@ -35,10 +28,18 @@ def parse_tesseract_text(text):
         "gender": None
     }
     
-    # Clean text to single line for global regexes
-    full_text = text.replace('\n', ' ')
+    full_text = " ".join(lines)
     
-    # 1. EPIC ID (Account for wide spacing like 'A B C 1 2 3 4 5 6 7')
+    # 1. Serial Number 
+    # Usually the very first or second isolated text blurb is the serial number (1-4 digits)
+    for text in lines[:3]:
+        # If it's a pure number and <= 4 digits
+        clean_num = re.sub(r'[^0-9]', '', text)
+        if clean_num and len(clean_num) <= 4:
+            record["serial_number"] = clean_num
+            break
+
+    # 1. EPIC ID
     epic_match = re.search(r'([A-Z]{3}\s*(?:\d\s*){7})', full_text, re.IGNORECASE)
     if epic_match:
         record["epic_id"] = epic_match.group(1).replace(" ", "").upper()
@@ -67,13 +68,11 @@ def parse_tesseract_text(text):
     house_match = re.search(r'House\s*N[ou]?[a-z]*\s*[^A-Za-z0-9]*([A-Za-z0-9/\\\-]+)', full_text, re.IGNORECASE)
     if house_match:
         val = house_match.group(1).strip()
-        val = re.sub(r'[^\w/\\-]', '', val) # Keep alphanumeric, /, \ and -
+        val = re.sub(r'[^\w/\\-]', '', val)
         if val:
             record["house_number"] = val
             
     # 5. Name & Relation Logic
-    lines = [L.strip() for L in text.split('\n') if L.strip()]
-    
     relation_keywords = ["FATHER", "HUSBAND", "MOTHER", "WIFE"]
     
     for i, line in enumerate(lines):
@@ -90,14 +89,14 @@ def parse_tesseract_text(text):
                 if len(clean_name) >= 2:
                     record["name"] = clean_name
                     
-        # Relation
+        # Relation Name
         for rel in relation_keywords:
             if rel in upper_line:
                 rel_match = re.search(rel + r'\s*[:;-]?\s*(.*)', line, re.IGNORECASE)
                 if rel_match:
                     val = rel_match.group(1)
                     clean_rel_name = re.sub(r'[^A-Za-z\s\.]', '', val).strip()
-                    clean_rel_name = re.sub(r'^(S\s*NAME|S\s*NANE|NAME|NANE|MAME|WAME|S\s*MAME|S\s*WAME)\s*', '', clean_rel_name, flags=re.IGNORECASE).strip()
+                    clean_rel_name = re.sub(r'^(S\s*NAME|S\s*NANE|NAME|NANE|MAME|WAME|S\s*MAME|S\s*WAME|S\s*HAME)\s*', '', clean_rel_name, flags=re.IGNORECASE).strip()
                     clean_rel_name = re.sub(r'\s+', ' ', clean_rel_name)
                     
                     if len(clean_rel_name) >= 2:
@@ -112,7 +111,7 @@ def parse_tesseract_text(text):
 
 def extract_cards_from_page(page_image_bytes):
     """
-    Uses mathematical slicing (3x10 grid) to crop 30 cards per page.
+    Mathematical grid slicing for ECI rolls. 30 cards per page.
     """
     nparr = np.frombuffer(page_image_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
@@ -135,21 +134,19 @@ def extract_cards_from_page(page_image_bytes):
             x_end = x_start + col_width
             
             crop = img[y_start:y_end, x_start:x_end]
-            cropped_images.append(crop)  # keep as CV2 image for Tesseract
+            cropped_images.append(crop)
             
     return cropped_images
 
 def main():
     print("=======================================")
-    print(" Electoral Roll PDF Extractor (Tesseract) ")
+    print(" Electoral Roll PDF Extractor (EasyOCR) ")
     print("=======================================\n")
     
-    # Check if Tesseract is installed where we expect it
-    if not os.path.exists(pytesseract.pytesseract.tesseract_cmd):
-        print("[!] ERROR: Tesseract OCR is not found at:")
-        print(f"    {pytesseract.pytesseract.tesseract_cmd}")
-        print("Please install Tesseract-OCR for Windows!")
-        return
+    print("Initializing EasyOCR Model (This may take a minute on first run)...")
+    # gpu=True will utilize Cuda if available, drastically improving speeds.
+    # Otherwise it comfortably falls back to cpu.
+    reader = easyocr.Reader(['en'], gpu=True)
         
     pdf_files = glob.glob("*.pdf")
     if not pdf_files:
@@ -163,35 +160,29 @@ def main():
         
         doc = fitz.open(pdf_file)
         
-        # Start at index 2 (Page 3) to skip the Cover and Summary map pages, 
-        # and end before the last page to skip the Deletions/Modifications summary.
         for page_num in range(2, len(doc) - 1):
             print(f"  -> Page {page_num+1}/{len(doc)}")
             page = doc.load_page(page_num)
             
-            # High res render (300 DPI) is extremely critical for classic OCR
+            # High res render (300 DPI)
             pix = page.get_pixmap(matrix=fitz.Matrix(3, 3))
             img_bytes = pix.tobytes("png")
             
             cards = extract_cards_from_page(img_bytes)
             
             for i, card_img in enumerate(cards):
-                # We do some quick image preprocessing before sending to Tesseract
-                gray = cv2.cvtColor(card_img, cv2.COLOR_BGR2GRAY)
-                # Denoise / thresholding to help Tesseract read English text
-                gray = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
-
-                # Run PyTesseract (English language)
+                # We can feed the RGB image directly into EasyOCR
                 try:
-                    text = pytesseract.image_to_string(gray, lang='eng')
+                    # detail=0 returns a simple list of text strings found in the image.
+                    # paragraph=False means it keeps tight horizontal bounding boxes distinct!
+                    lines = reader.readtext(card_img, detail=0, paragraph=False)
                 except Exception as e:
-                    print(f"    [!] Tesseract Error: {e}")
-                    text = ""
+                    print(f"    [!] EasyOCR Error: {e}")
+                    lines = []
                     
-                record = parse_tesseract_text(text)
+                record = parse_easyocr_text(lines)
                 
                 # Metadata
-                record["serial_number"] = None # Tesseract usually scrambles the small corner number
                 record["source_file"] = pdf_file
                 record["page_number"] = page_num + 1
                 record["ocr_flag"] = []
@@ -204,7 +195,6 @@ def main():
                 if not isinstance(age, int) or age < 18 or age > 120:
                     record["ocr_flag"].append("AGE_OUTLIER")
                     
-                # NULL checks
                 for field in ["name", "relation_name", "house_number", "gender"]:
                     if not record.get(field):
                         record["ocr_flag"].append("NEEDS_REVIEW")
