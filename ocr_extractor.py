@@ -3,7 +3,7 @@ import cv2
 import numpy as np
 import pandas as pd
 import re
-import requests
+import ollama
 import json
 import base64
 import os
@@ -11,11 +11,10 @@ import glob
 import time
 
 # ================= Configuration =================
-# Set your OpenRouter API Key here
-OPENROUTER_API_KEY = "sk-or-v1-..."  # <-- PASTE YOUR OPENROUTER API KEY HERE
+# Set this to your exact Ollama vision model name.
+# Tested with: llava, moondream, minicpm-v, etc.
+OLLAMA_MODEL_NAME = "llava"
 
-# Recommend free vision models on OpenRouter
-OPENROUTER_MODEL_NAME = "meta-llama/llama-3.2-11b-vision-instruct:free"
 
 # Output files
 OUTPUT_ALL_CSV = "voters_extracted.csv"
@@ -75,66 +74,34 @@ def extract_cards_from_page(page_image_bytes):
             
     return cropped_images
 
-def extract_data_openrouter(image_bytes):
+def extract_data_ollama(image_bytes):
     """
-    Sends the cropped card to OpenRouter API and returns parsed JSON.
+    Sends the cropped card to Ollama local vision model and returns parsed JSON.
     """
     base64_image = base64.b64encode(image_bytes).decode('utf-8')
-    data_uri = f"data:image/jpeg;base64,{base64_image}"
-    
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    
-    payload = {
-        "model": OPENROUTER_MODEL_NAME,
-        "response_format": {"type": "json_object"},
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": PROMPT
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": data_uri
-                        }
-                    }
-                ]
-            }
-        ],
-        "temperature": 0.0
-    }
     
     try:
-        response = requests.post(
-            url="https://openrouter.ai/api/v1/chat/completions",
-            headers=headers,
-            json=payload,
-            timeout=60
+        response = ollama.generate(
+            model=OLLAMA_MODEL_NAME,
+            prompt=PROMPT,
+            images=[base64_image],
+            format='json',
+            options={'temperature': 0.0} # Lowest temperature for facts
         )
-        response.raise_for_status()
-        result = response.json()
         
-        reply = result['choices'][0]['message']['content']
+        reply = response['response']
         # Clean up if model still outputted markdown
         reply = reply.replace("```json", "").replace("```", "").strip()
         
         data = json.loads(reply)
         return data
     except Exception as e:
-        print(f"    [!] OpenRouter Extraction Error: {e}")
-        if 'response' in locals() and hasattr(response, 'text'):
-            print(f"    [!] OpenRouter Response: {response.text}")
+        print(f"    [!] Ollama Extraction Error: {e}")
         return None
 
 def main():
     print("=======================================")
-    print(" Electoral Roll PDF Extractor (OpenRouter) ")
+    print(" Electoral Roll PDF Extractor (Ollama) ")
     print("=======================================\n")
     
     pdf_files = glob.glob("*.pdf")
@@ -162,7 +129,7 @@ def main():
             print(f"     Found {len(cards)} individual voter cards.")
             
             for i, card_img in enumerate(cards):
-                data = extract_data_openrouter(card_img)
+                data = extract_data_ollama(card_img)
                 
                 # Default empty record if failure occurs
                 record = {
@@ -201,8 +168,8 @@ def main():
                 record["ocr_flag"] = " | ".join(set(record["ocr_flag"]))
                 all_records.append(record)
                 
-                # Tiny sleep to let local GPU breathe
-                time.sleep(0.5)
+                # Sleep to respect free tier rate limits (OpenRouter allows ~10-20 requests/min free)
+                time.sleep(2.0)
 
         doc.close()
         
