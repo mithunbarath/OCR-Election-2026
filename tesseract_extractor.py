@@ -11,7 +11,7 @@ import time
 # ================= Configuration =================
 # VERY IMPORTANT: You MUST install Tesseract-OCR on Windows.
 # Download it from: https://github.com/UB-Mannheim/tesseract/wiki
-# And ensure you check the "Tamil" language pack during installation.
+# And ensure you install the standard English pack (default).
 # If you install it in the standard location, the path below will work.
 pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
@@ -19,17 +19,11 @@ OUTPUT_ALL_CSV = "voters_extracted_tess.csv"
 OUTPUT_REVIEW_CSV = "voters_review_tess.csv"
 
 # Regex Parsing Patterns (Tesseract output can be messy so we make them flexible)
-EPIC_PATTERN = re.compile(r'([A-Z]{3}[0-9]{7})')
-AGE_PATTERN = re.compile(r'Age\s*[:;-]?\s*(\d{2,3})', re.IGNORECASE)
-GENDER_PATTERN = re.compile(r'Gender\s*[:;-]?\s*(Male|Female|Third\s*Gender|M|F)', re.IGNORECASE)
-HOUSE_PATTERN = re.compile(r'House\s*N(?:o|umber)?\s*[:;-]?\s*([A-Za-z0-9/\\\-]+)', re.IGNORECASE)
-
-# Keywords to find Names
-RELATION_TYPES = ["Father", "Husband", "Mother"]
+# We will use inline regexes inside the function for more robust filtering.
 
 def parse_tesseract_text(text):
     """
-    Takes the raw string from Tesseract and uses Regex heuristics to pull out fields.
+    Takes the raw string from Tesseract and uses robust Regex heuristics to pull out fields.
     """
     record = {
         "epic_id": None,
@@ -41,17 +35,20 @@ def parse_tesseract_text(text):
         "gender": None
     }
     
-    # Clean up empty lines
-    lines = [L.strip() for L in text.split('\n') if L.strip()]
-    full_text = " ".join(lines)
+    # Clean text to single line for global regexes
+    full_text = text.replace('\n', ' ')
     
-    # 1. EPIC ID
-    epic_match = EPIC_PATTERN.search(full_text)
+    # 1. EPIC ID (Account for wide spacing like 'A B C 1 2 3 4 5 6 7')
+    epic_match = re.search(r'([A-Z]{3}\s*(?:\d\s*){7})', full_text, re.IGNORECASE)
     if epic_match:
-        record["epic_id"] = epic_match.group(1)
-        
+        record["epic_id"] = epic_match.group(1).replace(" ", "").upper()
+    else:
+        epic_match2 = re.search(r'([A-Z]{3}[0-9]{7})', full_text, re.IGNORECASE)
+        if epic_match2:
+            record["epic_id"] = epic_match2.group(1).upper()
+            
     # 2. Age
-    age_match = AGE_PATTERN.search(full_text)
+    age_match = re.search(r'Age\s*[^0-9]*(\d{2,3})', full_text, re.IGNORECASE)
     if age_match:
         try:
             record["age"] = int(age_match.group(1))
@@ -59,7 +56,7 @@ def parse_tesseract_text(text):
             pass
             
     # 3. Gender
-    gender_match = GENDER_PATTERN.search(full_text)
+    gender_match = re.search(r'Gender\s*[^A-Za-z]*(Male|Female|Third\s*Gender|M|F)', full_text, re.IGNORECASE)
     if gender_match:
         g = gender_match.group(1).upper()
         if g.startswith('M'): record["gender"] = "Male"
@@ -67,31 +64,49 @@ def parse_tesseract_text(text):
         else: record["gender"] = "Third Gender"
         
     # 4. House Number
-    house_match = HOUSE_PATTERN.search(full_text)
+    house_match = re.search(r'House\s*N[ou]?[a-z]*\s*[^A-Za-z0-9]*([A-Za-z0-9/\\\-]+)', full_text, re.IGNORECASE)
     if house_match:
-        record["house_number"] = house_match.group(1)
-        
+        val = house_match.group(1).strip()
+        val = re.sub(r'[^\w/\\-]', '', val) # Keep alphanumeric, /, \ and -
+        if val:
+            record["house_number"] = val
+            
     # 5. Name & Relation Logic
-    # Usually format is:
-    # Name : John Doe
-    # Father's Name : Richard Doe
+    lines = [L.strip() for L in text.split('\n') if L.strip()]
+    
+    relation_keywords = ["FATHER", "HUSBAND", "MOTHER", "WIFE"]
+    
     for i, line in enumerate(lines):
         upper_line = line.upper()
         
         # Primary Name
-        if "NAME" in upper_line and not any(r.upper() in upper_line for r in RELATION_TYPES):
-            parts = re.split(r'[:;-]', line, maxsplit=1)
-            if len(parts) > 1 and parts[1].strip():
-                record["name"] = parts[1].strip()
-                
-        # Relation
-        for rel in RELATION_TYPES:
-            if rel.upper() in upper_line:
-                record["relation_type"] = rel
-                parts = re.split(r'[:;-]', line, maxsplit=1)
-                if len(parts) > 1 and parts[1].strip():
-                    record["relation_name"] = parts[1].strip()
+        if not any(r in upper_line for r in relation_keywords):
+            name_match = re.search(r'(?:NAME|NANE|WAME|MAME|ELECTOR)\s*[:;-]?\s*(.*)', line, re.IGNORECASE)
+            if name_match:
+                val = name_match.group(1)
+                clean_name = re.sub(r'[^A-Za-z\s\.]', '', val).strip()
+                clean_name = re.sub(r'^(S\s*NAME|S\s*NANE|NAME|NANE|MAME|WAME)\s*', '', clean_name, flags=re.IGNORECASE).strip()
+                clean_name = re.sub(r'\s+', ' ', clean_name)
+                if len(clean_name) >= 2:
+                    record["name"] = clean_name
                     
+        # Relation
+        for rel in relation_keywords:
+            if rel in upper_line:
+                rel_match = re.search(rel + r'\s*[:;-]?\s*(.*)', line, re.IGNORECASE)
+                if rel_match:
+                    val = rel_match.group(1)
+                    clean_rel_name = re.sub(r'[^A-Za-z\s\.]', '', val).strip()
+                    clean_rel_name = re.sub(r'^(S\s*NAME|S\s*NANE|NAME|NANE|MAME|WAME|S\s*MAME|S\s*WAME)\s*', '', clean_rel_name, flags=re.IGNORECASE).strip()
+                    clean_rel_name = re.sub(r'\s+', ' ', clean_rel_name)
+                    
+                    if len(clean_rel_name) >= 2:
+                        record["relation_name"] = clean_rel_name
+                        if rel == "WIFE":
+                            record["relation_type"] = "Husband"
+                        else:
+                            record["relation_type"] = rel.capitalize()
+                            
     return record
 
 
@@ -133,7 +148,7 @@ def main():
     if not os.path.exists(pytesseract.pytesseract.tesseract_cmd):
         print("[!] ERROR: Tesseract OCR is not found at:")
         print(f"    {pytesseract.pytesseract.tesseract_cmd}")
-        print("Please install Tesseract-OCR for Windows and make sure you check the Tamil Language pack!")
+        print("Please install Tesseract-OCR for Windows!")
         return
         
     pdf_files = glob.glob("*.pdf")
@@ -161,14 +176,14 @@ def main():
             for i, card_img in enumerate(cards):
                 # We do some quick image preprocessing before sending to Tesseract
                 gray = cv2.cvtColor(card_img, cv2.COLOR_BGR2GRAY)
-                # Denoise / thresholding to help Tesseract read Tamil + English
+                # Denoise / thresholding to help Tesseract read English text
                 gray = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
 
-                # Run PyTesseract (eng+tam language)
+                # Run PyTesseract (English language)
                 try:
-                    text = pytesseract.image_to_string(gray, lang='eng+tam')
+                    text = pytesseract.image_to_string(gray, lang='eng')
                 except Exception as e:
-                    print(f"    [!] Tesseract Error: Did you install the 'tam' language pack? {e}")
+                    print(f"    [!] Tesseract Error: {e}")
                     text = ""
                     
                 record = parse_tesseract_text(text)

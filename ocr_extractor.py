@@ -24,7 +24,7 @@ OUTPUT_REVIEW_CSV = "voters_review.csv"
 EPIC_PATTERN = re.compile(r'^[A-Z]{3}[0-9]{7}$')
 
 PROMPT = """You are an OCR extraction assistant processing a single Indian Electoral Roll voter card.
-The card contains bilingual text (Tamil and English). Ignore the Tamil text and extract only the English text.
+The card contains English text. Extract the text carefully.
 Return ONLY a valid JSON object with the following schema. Do NOT include any markdown formatting or tags like ```json.
 {
   "serial_number": 12,
