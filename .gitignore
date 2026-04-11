@@ -1,0 +1,11 @@
+# Ignore PDF datasets
+119-eroll/
+2026-FC-EROLLGEN-S22-119-SIR-FinalRoll-Revision2-ENG-9-WI.pdf
+# Python cache / artifacts
+__pycache__/
+*.pyc
+venv/
+.env
+
+# Output CSV logs (optional, uncomment if you don't want results pushed)
+# *.csv
