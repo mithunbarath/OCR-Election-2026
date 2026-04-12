@@ -1,175 +1,69 @@
-# 🗳️ Electoral Roll OCR Extraction Pipeline
+# 🗳️ Tamil Nadu Electoral Roll OCR Extraction Pipeline
 
-A robust, scalable hybrid OCR pipeline to extract structured voter data from multi-page PDF Electoral Roll documents (ECI format). Combines **Tesseract** and **EasyOCR** with layout-aware image segmentation for high-accuracy bilingual (Tamil + English) field extraction.
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python&logoColor=white)
+![OpenCV](https://img.shields.io/badge/OpenCV-4.8.0%2B-green?logo=opencv&logoColor=white)
+![Tesseract](https://img.shields.io/badge/Tesseract-OCR-blueviolet?logo=tesseract&logoColor=white)
+![PyMuPDF](https://img.shields.io/badge/PyMuPDF-1.23.0%2B-orange?logo=pdf&logoColor=white)
+![License](https://img.shields.io/badge/License-Research_Only-red)
+
+A robust, highly scalable, parallel OCR pipeline built to extract structured voter data directly from multi-page Tamil Nadu Electoral Roll PDFs (ECI format). This solution uses dynamic layout-aware contour segmentation paired with powerful bilingual (Tamil + English) Tesseract OCR engines to guarantee incredibly high accuracy without manual cropping.
 
 ---
 
 ## 📌 Features
 
-- 🔍 **Hybrid OCR** — Tesseract for structured alphanumeric fields + EasyOCR for Tamil/English names
-- 📄 **PDF to Image** conversion at 300+ DPI using PyMuPDF (no Poppler needed)
-- 🗂️ **Grid-based card segmentation** — fixed 3×10 layout with proportional sub-region isolation
-- 🖼️ **Per-field preprocessing** — adaptive thresholding, upscaling, denoising per ROI
-- 🔤 **Bilingual post-processing** — regex + Tamil keyword normalization
-- ⚡ **Multiprocessing** — parallel page processing via `ProcessPoolExecutor`
-- 📊 **Structured CSV output** — 8 fields per voter card
+- 🔍 **Bilingual OCR** — Built-in support for mixed Tamil + English extraction out of the box using Tesseract `tam+eng`.
+- ⚡ **Multi-Threaded Performance** — Implements `ThreadPoolExecutor` and `ProcessPoolExecutor` for fully parallel, blazing-fast batch PDF processing.
+- 📐 **Adaptive Box Segmentation** — Leverages pure OpenCV morphological operations to dynamically identify individual voter card grids (falls back to a calculated mathematical grid if bounds are unclear).
+- 📄 **Zero-Dependency PDF Parsing** — Utilizes `PyMuPDF` (fitz) at High-Res 300 DPI (does NOT require complex Poppler installations on Windows!).
+- 🧹 **Advanced NLP Regex Parsing** — Highly tuned heuristics map unstructured Tamil strings into exactly 8 clean columns: `serial_number`, `epic_id`, `name`, `relation_type`, `relation_name`, `house_number`, `age`, and `gender`.
+- 💽 **Crash-Resistant Checkpointing** — Automatically reads the output CSV to skip already processed files if interrupted, saving hours of computation.
 
 ---
 
 ## 🏗️ System Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                      main.py  (Orchestrator)                    │
-│                                                                 │
-│  PDF Files ──► pdf_processor.py ──► [Page Images @ 300 DPI]    │
-│                                            │                    │
-│                                   image_segmentation.py         │
-│                                            │                    │
-│                        ┌──────────────────────────────┐         │
-│                        │  30 Voter Cards per Page     │         │
-│                        │  (3 cols × 10 rows grid)     │         │
-│                        └──────────────────────────────┘         │
-│                                            │                    │
-│                                   Sub-Region Isolation          │
-│                        ┌──────────────────────────────┐         │
-│                        │  serial_no │ epic_id         │         │
-│                        │  name_rel  │ bottom_details  │         │
-│                        └──────────────────────────────┘         │
-│                                            │                    │
-│                                     ocr_engine.py               │
-│                         ┌──────────────────────────┐            │
-│                         │  Tesseract  │  EasyOCR   │            │
-│                         │  (EPIC/Age) │ (Names/Rel)│            │
-│                         └──────────────────────────┘            │
-│                                            │                    │
-│                                    data_cleaner.py              │
-│                                            │                    │
-│                              extracted_voters_hybrid.csv        │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    A[Raw Electoral PDF] -->|PyMuPDF @ 300 DPI| B(Page Images)
+    B -->|OpenCV Thresholding\n& Morphological Dilation| C{Card Contour Detection}
+    
+    C -->|Success| D[30+ Individual Voter Cards]
+    C -->|Failure| E[Fallback to Fixed 3x10 Grid]
+    E --> D
+    
+    D -->|2x Bicubic Upscaling\n+ NlMeansDenoising| F(Preprocessed Card Binary)
+    F -->|Tesseract psm 6 -l tam+eng| G[Raw Bilingual Text]
+    
+    G --> H{Regex Data Cleaner}
+    
+    H -->|Tamil Name/Relation Keywords| I[Structured Voter Dictionary]
+    H -->|English EPIC ID Patterns| I
+    
+    I -->|Thread-Safe Writer| J[(tamil_voters_extracted.csv)]
 ```
 
 ---
 
 ## 📂 Project Structure
 
-```
+```text
 OCR-Election-2026/
 │
-├── electoral_ocr_pipeline/          # Core pipeline package
-│   ├── __init__.py
-│   ├── main.py                      # Entry point + multiprocessing orchestrator
-│   ├── pdf_processor.py             # PDF → high-res OpenCV images
-│   ├── image_segmentation.py        # Page → cards → sub-regions (ROIs)
-│   ├── ocr_engine.py                # Hybrid OCR (Tesseract + EasyOCR)
-│   └── data_cleaner.py              # Text post-processing + regex field extraction
+├── tamil_ocr_pipeline.py            # Primary robust Tamil OCR pipeline (Recommended)
+├── tesseract_extractor.py           # Strict Tesseract English numeric extractor 
+├── easyocr_extractor.py             # Alternative EasyOCR standalone engine
 │
-├── tesseract_extractor.py           # Standalone Tesseract-only extractor (legacy)
-├── easyocr_extractor.py             # Standalone EasyOCR extractor (legacy)
-├── ocr_extractor.py                 # Vision API extractor (legacy)
+├── electoral_ocr_pipeline/          # Modular hybrid architecture mapping
+│   ├── main.py                      
+│   ├── pdf_processor.py             
+│   ├── image_segmentation.py        
+│   ├── ocr_engine.py                
+│   └── data_cleaner.py              
 │
-├── extracted_voters_hybrid.csv      # Main output (hybrid pipeline)
-├── voters_extracted_tess.csv        # Output from Tesseract-only run
-├── voters_extracted_easyocr.csv     # Output from EasyOCR-only run
-│
-├── requirements.txt
-└── README.md
+├── requirements.txt                 # Dependency map
+└── README.md                        # Project documentation (You are here!)
 ```
-
----
-
-## ⚙️ Module Details
-
-### `pdf_processor.py`
-Converts each PDF page to a high-resolution OpenCV image using PyMuPDF.
-
-- Uses `fitz.Matrix(4.0, 4.0)` for ~288 DPI rendering (no Poppler dependency)
-- Automatically skips the cover page and deletion-summary last page
-- Yields `(page_number, cv2_bgr_image)` as a memory-efficient generator
-
-### `image_segmentation.py`
-Splits each page image into voter cards and each card into field regions.
-
-**Page → 30 Cards (3×10 grid):**
-```
-┌──────────────┬──────────────┬──────────────┐  ▲ 11% header offset
-│  Card [1,1]  │  Card [1,2]  │  Card [1,3]  │
-├──────────────┼──────────────┼──────────────┤
-│     ...      │     ...      │     ...      │  10 rows
-├──────────────┼──────────────┼──────────────┤
-│  Card[10,1]  │  Card[10,2]  │  Card[10,3]  │
-└──────────────┴──────────────┴──────────────┘  ▼ 4% footer offset
-```
-
-**Card → Sub-Regions (ROIs):**
-
-| Region         | X Range         | Y Range           | Fields Extracted        |
-|----------------|-----------------|-------------------|-------------------------|
-| `serial_no`    | 0% → 35%        | 0% → 15%          | Serial Number           |
-| `epic_id`      | 35% → 100%      | 0% → 15%          | EPIC ID                 |
-| `name_rel`     | 25% → 100%      | 15% → 65%         | Name, Relation Type/Name|
-| `bottom_details`| 25% → 100%    | 65% → 95%         | House No, Age, Gender   |
-
-### `ocr_engine.py`
-Applies optimal OCR strategy per field region.
-
-| Region           | OCR Engine  | Config                                        |
-|------------------|-------------|-----------------------------------------------|
-| `serial_no`      | Tesseract   | PSM 7, whitelist: `A-Z0-9`, Otsu threshold   |
-| `epic_id`        | Tesseract   | PSM 7, whitelist: `A-Z0-9`, Otsu threshold   |
-| `name_rel`       | EasyOCR     | `['en', 'ta']`, 2× upscale                   |
-| `bottom_details` | EasyOCR     | `['en', 'ta']`, 2× upscale                   |
-
-**Preprocessing per ROI:**
-1. BGR → Grayscale
-2. 2× bicubic upscaling
-3. Adaptive Gaussian thresholding (for Tesseract) or raw BGR (for EasyOCR)
-
-### `data_cleaner.py`
-Parses raw OCR strings into structured fields using regex and bilingual heuristics.
-
-| Field           | Strategy                                                      |
-|-----------------|---------------------------------------------------------------|
-| `epic_id`       | Regex: `[A-Z]{3}[0-9]{7}` with OCR noise cleanup             |
-| `serial_number` | Strip non-numeric characters                                  |
-| `name`          | Keyword detection: `NAME` / `பெயர்`                          |
-| `relation_type` | Keyword match: `FATHER/HUSBAND/MOTHER` or Tamil equivalents   |
-| `relation_name` | Text after relation keyword                                   |
-| `house_number`  | Regex: after `House No` / `வீட்டு எண்`                       |
-| `age`           | Regex: integer 18–120 after `Age` / `வயது`                   |
-| `gender`        | Keyword: `MALE/FEMALE/THIRD` or `ஆண்/பெண்/மூன்றாம்`          |
-
-### `main.py`
-Parallel orchestrator using `ProcessPoolExecutor`.
-
-```
-1. Load all PDFs → extract page images sequentially (memory safe)
-2. Submit each page as a parallel worker task
-3. Each worker: segment cards → isolate ROIs → run hybrid OCR → clean data
-4. Aggregate all records
-5. Export to CSV
-```
-
-- Default workers: `min(cpu_count, 4)` — reduce to `2` if OOM errors occur
-- All exceptions caught per-page; failed pages are logged and skipped
-
----
-
-## 📤 Output CSV Schema
-
-| Column          | Type    | Description                            |
-|-----------------|---------|----------------------------------------|
-| `serial_number` | string  | Card serial number within the roll     |
-| `epic_id`       | string  | Voter EPIC ID (format: `XXX1234567`)   |
-| `name`          | string  | Voter's full name                      |
-| `relation_type` | string  | `Father` / `Husband` / `Mother`        |
-| `relation_name` | string  | Name of the relation                   |
-| `house_number`  | string  | House/door number                      |
-| `age`           | integer | Voter's age (18–120)                   |
-| `gender`        | string  | `Male` / `Female` / `Third Gender`     |
-| `source_file`   | string  | Source PDF filename                    |
-| `page_number`   | integer | Page number within the PDF             |
-| `card_index`    | integer | Card index on the page (1–30)          |
 
 ---
 
@@ -178,74 +72,74 @@ Parallel orchestrator using `ProcessPoolExecutor`.
 ### Prerequisites
 
 1. **Python 3.10+**
-2. **Tesseract OCR for Windows**
-   - Download from: https://github.com/UB-Mannheim/tesseract/wiki
-   - Install to default path: `C:\Program Files\Tesseract-OCR\`
+2. **Tesseract OCR (With Tamil Language Data)**
+   - Download the Windows installer from [UB-Mannheim/tesseract](https://github.com/UB-Mannheim/tesseract/wiki)
+   - **Important:** During installation, under "Additional Language Data", make sure you check the box for **Tamil**.
+   - Install to the default path: `C:\Program Files\Tesseract-OCR\`
 
 ### Installation
 
-```bash
-pip install PyMuPDF>=1.23.0 opencv-python>=4.8.0 pytesseract easyocr pandas
-```
-
-Or via requirements file:
+Clone the repository and install the standard dependencies:
 
 ```bash
-pip install -r requirements.txt
+pip install PyMuPDF>=1.23.0 opencv-python>=4.8.0 pytesseract numpy pandas pillow
 ```
+
+*(Alternatively, run `pip install -r requirements.txt`)*
 
 ### Running the Pipeline
 
-Place your ECI Electoral Roll PDF(s) in the project root directory, then run:
+Place your ECI Electoral Roll PDFs inside your target directory. For the main, highly-stable single-file Tamil OCR Pipeline, run:
 
 ```bash
-python -m electoral_ocr_pipeline.main
+# To test the pipeline quickly on just the first 2 PDFs:
+python tamil_ocr_pipeline.py --test
+
+# To process a specific target PDF:
+python tamil_ocr_pipeline.py --file "119-eroll/2026-EROLLGEN-S22-119-SIR-DraftRoll-Revision1-TAM-1-WI.pdf"
+
+# To run a full concurrent batch process across all files in the directory:
+python tamil_ocr_pipeline.py --workers 4
 ```
 
-Output will be saved as `extracted_voters_hybrid.csv`.
+The output will automatically be consolidated safely via thread-locks into `tamil_voters_extracted.csv`.
 
 ---
 
-## 🔧 Troubleshooting
+## 📥 Output Schema
 
-### EasyOCR Tamil model size mismatch
-If you encounter:
-```
-RuntimeError: size mismatch for Prediction.weight ...
-```
-This is a known bug in recent EasyOCR releases where the server-side `tamil.pth` has more characters than the installed code expects. The pipeline includes a patch to EasyOCR's `recognition.py` to **filter shape-mismatched layers** before loading, allowing the model to load without crashing.
+The CSV generated utilizes strict column headers for easy database insertion or Pandas Dataframe manipulation:
 
-### Low OCR accuracy for Tamil names
-- The Tamil sub-regions use EasyOCR in bilingual mode (`en` + `ta`)
-- Ensure the `tamil.pth` model is downloaded (first run requires internet)
-- For better accuracy, tweak ROI proportions in `image_segmentation.py`
-
-### OOM / Memory errors
-Reduce the worker count in `main.py`:
-```python
-workers = 2  # line 63
-```
+| Column          | Example Data                | Description                                |
+|-----------------|-----------------------------|--------------------------------------------|
+| `serial_number` | 24                          | Index on the local page                    |
+| `epic_id`       | TJV1234567                  | Voter Identity Hash                        |
+| `name`          | முத்துச்சாமி               | Extracted voter name                       |
+| `relation_type` | Father                      | Mapped relationship constraint             |
+| `relation_name` | கருப்பசாமி                | Extracted relation name                    |
+| `house_number`  | 14/2A                       | Extracted alphanumeric door sequence       |
+| `age`           | 45                          | Normalized integer mapped to age           |
+| `gender`        | ஆண்                         | Gender (ஆண் = Male, பெண் = Female)         |
+| `source_file`   | 2026-FC-EROLLGEN...pdf      | Traceability mapping back to the directory |
+| `page_number`   | 14                          | Traceability mapping                       |
 
 ---
 
-## 📊 Benchmark
+## 🔧 Pro Tips & Troubleshooting
 
-Tested on a 300-page ECI Electoral Roll PDF (9,000 voter cards):
+> [!WARNING]
+> **RAM Utilization (OOM Errors):**
+> High DPI PyMuPDF processing across multiple threads consumes significant memory. If the script crashes silently without an error, edit the script or use the argument `--workers 2` to reduce memory constraints.
 
-| Metric              | Value         |
-|---------------------|---------------|
-| Pages Processed     | 300           |
-| Cards per Page      | 30            |
-| Total Cards         | 9,000         |
-| Avg Time per Page   | ~8–12 seconds |
-| EPIC ID Accuracy    | ~92%          |
-| Name Accuracy (en)  | ~85%          |
+> [!TIP]
+> **Tesseract Missing Path Error:**
+> If you get a "tesseract is not installed or it's not in your PATH" error, ensure `pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'` inside `tamil_ocr_pipeline.py` correctly points to your executable.
 
 ---
 
-## 📄 License
+## 📄 License & Compliance
 
-This project is developed for electoral data research purposes. Ensure data handling complies with applicable privacy laws and ECI guidelines.
+Developed strictly for electoral data research, demographic testing, and analytics automation. Ensure your usage of extracted public data complies fully with applicable local privacy laws and Election Commission of India (ECI) guidelines.
 
 ---
 
